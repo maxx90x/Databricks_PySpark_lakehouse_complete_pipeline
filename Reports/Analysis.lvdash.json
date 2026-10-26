@@ -1,0 +1,747 @@
+{
+  "datasets": [
+    {
+      "name": "dataset1",
+      "displayName": "fact_daily_stock_performance",
+      "config": {
+        "version": "1.1",
+        "source": "db_miniproject_finance_ws.gold.fact_daily_stock_performance",
+        "dimensions": [
+          {
+            "expr": "source.*"
+          }
+        ],
+        "measures": [
+          {
+            "name": "count",
+            "expr": "COUNT(*)",
+            "displayName": "Count",
+            "comment": "Represents the total number of rows in the dataset. Use this measure to count all"
+          }
+        ]
+      }
+    },
+    {
+      "name": "yearly_roi",
+      "displayName": "Yearly ROI from Closing Values",
+      "config": {
+        "version": "1.1",
+        "source": "WITH yearly_close AS (\n  SELECT \n    f.Region_Key,\n    r.Stock_Exchange,\n    CAST(f.Date_Key / 10000 AS INT) AS Year,\n    AVG(f.Close) AS Avg_Year_End_Close\n  FROM db_miniproject_finance_ws.gold.fact_daily_stock_performance f\n  JOIN db_miniproject_finance_ws.gold.dim_region r ON f.Region_Key = r.Region_Key\n  GROUP BY f.Region_Key, r.Stock_Exchange, CAST(f.Date_Key / 10000 AS INT)\n  HAVING AVG(f.Close) IS NOT NULL\n), with_lag AS (\n  SELECT \n    Stock_Exchange,\n    Year,\n    Avg_Year_End_Close,\n    LAG(Avg_Year_End_Close) OVER (PARTITION BY Stock_Exchange ORDER BY Year) AS Prev_Year_Close,\n    FIRST_VALUE(Avg_Year_End_Close) OVER (PARTITION BY Stock_Exchange ORDER BY Year) AS Base_Close\n  FROM yearly_close\n) SELECT\n  Stock_Exchange,\n  Year,\n  Avg_Year_End_Close,\n  Prev_Year_Close,\n  CASE WHEN Prev_Year_Close IS NOT NULL AND Prev_Year_Close != 0 \n    THEN (Avg_Year_End_Close - Prev_Year_Close) / Prev_Year_Close * 100 \n    ELSE NULL END AS YoY_ROI_Pct,\n  CASE WHEN Base_Close IS NOT NULL AND Base_Close != 0\n    THEN (Avg_Year_End_Close - Base_Close) / Base_Close * 100\n    ELSE NULL END AS Cumulative_ROI_Pct\nFROM with_lag ORDER BY Stock_Exchange, Year\n",
+        "dimensions": [
+          {
+            "expr": "Stock_Exchange"
+          },
+          {
+            "expr": "Year"
+          },
+          {
+            "expr": "Avg_Year_End_Close"
+          },
+          {
+            "expr": "Prev_Year_Close"
+          },
+          {
+            "expr": "YoY_ROI_Pct"
+          },
+          {
+            "expr": "Cumulative_ROI_Pct"
+          }
+        ],
+        "measures": [
+          {
+            "name": "avg_roi",
+            "expr": "AVG(YoY_ROI_Pct)",
+            "displayName": "Avg YoY ROI %",
+            "format": {
+              "type": "number",
+              "decimalPlaces": {
+                "type": "exact",
+                "places": 2.0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "gdp_growth",
+      "displayName": "GDP Growth by Region",
+      "config": {
+        "version": "1.1",
+        "source": "WITH base AS (\n  SELECT\n    r.Region_Name,\n    f.Year,\n    f.GDP_Growth_Pct\n  FROM db_miniproject_finance_ws.gold.fact_yearly_macro_indicators f\n  JOIN db_miniproject_finance_ws.gold.dim_region r ON f.Region_Key = r.Region_Key\n  WHERE f.GDP_Growth_Pct IS NOT NULL\n) SELECT\n  Region_Name,\n  Year,\n  GDP_Growth_Pct,\n  SUM(GDP_Growth_Pct) OVER (PARTITION BY Region_Name ORDER BY Year) AS Cumulative_GDP_Growth_Pct\nFROM base ORDER BY Region_Name, Year\n",
+        "dimensions": [
+          {
+            "expr": "Region_Name"
+          },
+          {
+            "expr": "Year"
+          },
+          {
+            "expr": "GDP_Growth_Pct"
+          },
+          {
+            "expr": "Cumulative_GDP_Growth_Pct"
+          }
+        ]
+      }
+    },
+    {
+      "name": "index_gdp_correlation",
+      "displayName": "Index ROI vs GDP Growth Correlation",
+      "config": {
+        "version": "1.1",
+        "source": "WITH yearly_close AS (\n  SELECT \n    f.Region_Key,\n    r.Region_Name,\n    CAST(f.Date_Key / 10000 AS INT) AS Year,\n    AVG(f.Close) AS Avg_Year_End_Close\n  FROM db_miniproject_finance_ws.gold.fact_daily_stock_performance f\n  JOIN db_miniproject_finance_ws.gold.dim_region r ON f.Region_Key = r.Region_Key\n  GROUP BY f.Region_Key, r.Region_Name, CAST(f.Date_Key / 10000 AS INT)\n  HAVING AVG(f.Close) IS NOT NULL\n), with_roi AS (\n  SELECT \n    Region_Key,\n    Region_Name,\n    Year,\n    Avg_Year_End_Close,\n    LAG(Avg_Year_End_Close) OVER (PARTITION BY Region_Key ORDER BY Year) AS Prev_Year_Close\n  FROM yearly_close\n), roi AS (\n  SELECT\n    Region_Key,\n    Region_Name,\n    Year,\n    CASE WHEN Prev_Year_Close IS NOT NULL AND Prev_Year_Close != 0 \n      THEN (Avg_Year_End_Close - Prev_Year_Close) / Prev_Year_Close * 100 \n      ELSE NULL END AS YoY_ROI_Pct\n  FROM with_roi\n) SELECT\n  roi.Region_Name,\n  roi.Year,\n  roi.YoY_ROI_Pct,\n  g.GDP_Growth_Pct\nFROM roi JOIN db_miniproject_finance_ws.gold.fact_yearly_macro_indicators g\n  ON roi.Region_Key = g.Region_Key AND roi.Year = g.Year\nWHERE roi.YoY_ROI_Pct IS NOT NULL AND g.GDP_Growth_Pct IS NOT NULL\n",
+        "dimensions": [
+          {
+            "expr": "Region_Name"
+          },
+          {
+            "expr": "Year"
+          },
+          {
+            "expr": "YoY_ROI_Pct"
+          },
+          {
+            "expr": "GDP_Growth_Pct"
+          }
+        ]
+      }
+    },
+    {
+      "name": "lag_analysis",
+      "displayName": "Lag Analysis: GDP vs Stock Returns",
+      "config": {
+        "version": "1.1",
+        "source": "WITH yearly_close AS (\n  SELECT \n    f.Region_Key,\n    r.Region_Name,\n    r.Stock_Exchange,\n    CAST(f.Date_Key / 10000 AS INT) AS Year,\n    AVG(f.Close) AS Avg_Year_End_Close\n  FROM db_miniproject_finance_ws.gold.fact_daily_stock_performance f\n  JOIN db_miniproject_finance_ws.gold.dim_region r ON f.Region_Key = r.Region_Key\n  WHERE r.Region_Name IN ('India', 'China')\n  GROUP BY f.Region_Key, r.Region_Name, r.Stock_Exchange, CAST(f.Date_Key / 10000 AS INT)\n  HAVING AVG(f.Close) IS NOT NULL\n), with_roi AS (\n  SELECT \n    Region_Key, Region_Name, Stock_Exchange, Year, Avg_Year_End_Close,\n    LAG(Avg_Year_End_Close) OVER (PARTITION BY Region_Key ORDER BY Year) AS Prev_Year_Close\n  FROM yearly_close\n), roi AS (\n  SELECT\n    Region_Key, Region_Name, Stock_Exchange, Year,\n    CASE WHEN Prev_Year_Close IS NOT NULL AND Prev_Year_Close != 0 \n      THEN (Avg_Year_End_Close - Prev_Year_Close) / Prev_Year_Close * 100 \n      ELSE NULL END AS YoY_ROI_Pct\n  FROM with_roi\n), combined AS (\n  SELECT\n    roi.Region_Name,\n    roi.Stock_Exchange,\n    roi.Year,\n    roi.YoY_ROI_Pct AS Stock_ROI_Pct,\n    g.GDP_Growth_Pct\n  FROM roi\n  JOIN db_miniproject_finance_ws.gold.fact_yearly_macro_indicators g\n    ON roi.Region_Key = g.Region_Key AND roi.Year = g.Year\n  WHERE roi.YoY_ROI_Pct IS NOT NULL AND g.GDP_Growth_Pct IS NOT NULL\n) SELECT\n  Region_Name,\n  Stock_Exchange,\n  Year,\n  Stock_ROI_Pct,\n  CAST(GDP_Growth_Pct AS DECIMAL(18,2)) AS GDP_Growth_Pct,\n  LAG(CAST(GDP_Growth_Pct AS DECIMAL(18,2))) OVER (PARTITION BY Region_Name ORDER BY Year) AS GDP_Growth_Prev_Year,\n  LEAD(CAST(GDP_Growth_Pct AS DECIMAL(18,2))) OVER (PARTITION BY Region_Name ORDER BY Year) AS GDP_Growth_Next_Year\nFROM combined ORDER BY Region_Name, Year\n",
+        "dimensions": [
+          {
+            "expr": "Region_Name"
+          },
+          {
+            "expr": "Stock_Exchange"
+          },
+          {
+            "expr": "Year"
+          },
+          {
+            "expr": "Stock_ROI_Pct"
+          },
+          {
+            "expr": "GDP_Growth_Pct"
+          },
+          {
+            "expr": "GDP_Growth_Prev_Year"
+          },
+          {
+            "expr": "GDP_Growth_Next_Year"
+          }
+        ]
+      }
+    },
+    {
+      "name": "lag_analysis_all",
+      "displayName": "Lag Analysis: GDP vs Stock Returns (US & Euro)",
+      "config": {
+        "version": "1.1",
+        "source": "WITH yearly_close AS (\n  SELECT \n    f.Region_Key,\n    r.Region_Name,\n    r.Stock_Exchange,\n    CAST(f.Date_Key / 10000 AS INT) AS Year,\n    AVG(f.Close) AS Avg_Year_End_Close\n  FROM db_miniproject_finance_ws.gold.fact_daily_stock_performance f\n  JOIN db_miniproject_finance_ws.gold.dim_region r ON f.Region_Key = r.Region_Key\n  WHERE r.Region_Name NOT IN ('India', 'China', 'Japan')\n  GROUP BY f.Region_Key, r.Region_Name, r.Stock_Exchange, CAST(f.Date_Key / 10000 AS INT)\n  HAVING AVG(f.Close) IS NOT NULL\n), with_roi AS (\n  SELECT \n    Region_Key, Region_Name, Stock_Exchange, Year, Avg_Year_End_Close,\n    LAG(Avg_Year_End_Close) OVER (PARTITION BY Region_Key ORDER BY Year) AS Prev_Year_Close\n  FROM yearly_close\n), roi AS (\n  SELECT\n    Region_Key, Region_Name, Stock_Exchange, Year,\n    CASE WHEN Prev_Year_Close IS NOT NULL AND Prev_Year_Close != 0 \n      THEN (Avg_Year_End_Close - Prev_Year_Close) / Prev_Year_Close * 100 \n      ELSE NULL END AS YoY_ROI_Pct\n  FROM with_roi\n), combined AS (\n  SELECT\n    roi.Region_Name,\n    roi.Stock_Exchange,\n    roi.Year,\n    roi.YoY_ROI_Pct AS Stock_ROI_Pct,\n    g.GDP_Growth_Pct\n  FROM roi\n  JOIN db_miniproject_finance_ws.gold.fact_yearly_macro_indicators g\n    ON roi.Region_Key = g.Region_Key AND roi.Year = g.Year\n  WHERE roi.YoY_ROI_Pct IS NOT NULL AND g.GDP_Growth_Pct IS NOT NULL\n) SELECT\n  Region_Name,\n  Stock_Exchange,\n  Year,\n  Stock_ROI_Pct,\n  CAST(GDP_Growth_Pct AS DECIMAL(18,2)) AS GDP_Growth_Pct\nFROM combined ORDER BY Region_Name, Year\n",
+        "dimensions": [
+          {
+            "expr": "Region_Name"
+          },
+          {
+            "expr": "Stock_Exchange"
+          },
+          {
+            "expr": "Year"
+          },
+          {
+            "expr": "Stock_ROI_Pct"
+          },
+          {
+            "expr": "GDP_Growth_Pct"
+          }
+        ]
+      }
+    },
+    {
+      "name": "lag_analysis_japan",
+      "displayName": "Lag Analysis: GDP vs Stock Returns (Japan)",
+      "config": {
+        "version": "1.1",
+        "source": "WITH yearly_close AS (\n  SELECT \n    f.Region_Key,\n    r.Region_Name,\n    r.Stock_Exchange,\n    CAST(f.Date_Key / 10000 AS INT) AS Year,\n    AVG(f.Close) AS Avg_Year_End_Close\n  FROM db_miniproject_finance_ws.gold.fact_daily_stock_performance f\n  JOIN db_miniproject_finance_ws.gold.dim_region r ON f.Region_Key = r.Region_Key\n  WHERE r.Region_Name = 'Japan'\n  GROUP BY f.Region_Key, r.Region_Name, r.Stock_Exchange, CAST(f.Date_Key / 10000 AS INT)\n  HAVING AVG(f.Close) IS NOT NULL\n), with_roi AS (\n  SELECT \n    Region_Key, Region_Name, Stock_Exchange, Year, Avg_Year_End_Close,\n    LAG(Avg_Year_End_Close) OVER (PARTITION BY Region_Key ORDER BY Year) AS Prev_Year_Close\n  FROM yearly_close\n), roi AS (\n  SELECT\n    Region_Key, Region_Name, Stock_Exchange, Year,\n    CASE WHEN Prev_Year_Close IS NOT NULL AND Prev_Year_Close != 0 \n      THEN (Avg_Year_End_Close - Prev_Year_Close) / Prev_Year_Close * 100 \n      ELSE NULL END AS YoY_ROI_Pct\n  FROM with_roi\n), combined AS (\n  SELECT\n    roi.Region_Name,\n    roi.Stock_Exchange,\n    roi.Year,\n    roi.YoY_ROI_Pct AS Stock_ROI_Pct,\n    g.GDP_Growth_Pct\n  FROM roi\n  JOIN db_miniproject_finance_ws.gold.fact_yearly_macro_indicators g\n    ON roi.Region_Key = g.Region_Key AND roi.Year = g.Year\n  WHERE roi.YoY_ROI_Pct IS NOT NULL AND g.GDP_Growth_Pct IS NOT NULL\n) SELECT\n  Region_Name,\n  Stock_Exchange,\n  Year,\n  Stock_ROI_Pct,\n  CAST(GDP_Growth_Pct AS DECIMAL(18,2)) AS GDP_Growth_Pct\nFROM combined ORDER BY Year\n",
+        "dimensions": [
+          {
+            "expr": "Region_Name"
+          },
+          {
+            "expr": "Stock_Exchange"
+          },
+          {
+            "expr": "Year"
+          },
+          {
+            "expr": "Stock_ROI_Pct"
+          },
+          {
+            "expr": "GDP_Growth_Pct"
+          }
+        ]
+      }
+    }
+  ],
+  "pages": [
+    {
+      "name": "page1",
+      "displayName": "Index and GDP growth",
+      "layout": [
+        {
+          "widget": {
+            "name": "cumulative_roi_line",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "yearly_roi",
+                  "fields": [
+                    {
+                      "name": "Stock_Exchange",
+                      "expression": "`Stock_Exchange`"
+                    },
+                    {
+                      "name": "Year",
+                      "expression": "`Year`"
+                    },
+                    {
+                      "name": "Cumulative_ROI_Pct",
+                      "expression": "`Cumulative_ROI_Pct`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`Cumulative_ROI_Pct` IS NOT NULL"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "Cumulative ROI % by Year",
+                  "fields": []
+                }
+              },
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "Year",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "Cumulative_ROI_Pct",
+                  "axis": {
+                    "hideTitle": true
+                  },
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "Stock_Exchange",
+                  "legend": {
+                    "hide": false,
+                    "hideTitle": false,
+                    "title": "Index"
+                  },
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "gdp_growth_line",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gdp_growth",
+                  "fields": [
+                    {
+                      "name": "Region_Name",
+                      "expression": "`Region_Name`"
+                    },
+                    {
+                      "name": "Year",
+                      "expression": "`Year`"
+                    },
+                    {
+                      "name": "Cumulative_GDP_Growth_Pct",
+                      "expression": "`Cumulative_GDP_Growth_Pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": false,
+                "title": {
+                  "value": "Cumulative GDP Growth % by Year",
+                  "fields": []
+                }
+              },
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "Year",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "Cumulative_GDP_Growth_Pct",
+                  "axis": {
+                    "hideTitle": true
+                  },
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "Region_Name",
+                  "legend": {
+                    "hide": false,
+                    "hideTitle": false,
+                    "title": "Region"
+                  },
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "99b40ad3",
+      "displayName": "Lag Analysis",
+      "layout": [
+        {
+          "widget": {
+            "name": "lag_analysis_combo",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "lag_analysis",
+                  "fields": [
+                    {
+                      "name": "Year",
+                      "expression": "`Year`"
+                    },
+                    {
+                      "name": "Stock_ROI_Pct",
+                      "expression": "`Stock_ROI_Pct`"
+                    },
+                    {
+                      "name": "GDP_Growth_Pct",
+                      "expression": "`GDP_Growth_Pct`"
+                    },
+                    {
+                      "name": "Stock_Exchange",
+                      "expression": "`Stock_Exchange`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "facet": {
+                "type": "wrap",
+                "fieldName": "Stock_Exchange",
+                "layout": {
+                  "column": {
+                    "type": "count",
+                    "value": 2
+                  }
+                },
+                "scale": {
+                  "type": "categorical"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Lag Analysis: GDP Growth vs Stock ROI — India & China"
+              },
+              "version": 1,
+              "mark": {
+                "lineShape": "smooth"
+              },
+              "widgetType": "combo",
+              "encodings": {
+                "x": {
+                  "fieldName": "Year",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "primary": {
+                    "fields": [
+                      {
+                        "fieldName": "Stock_ROI_Pct",
+                        "displayName": "Stock Index ROI %"
+                      }
+                    ],
+                    "scale": {
+                      "type": "quantitative"
+                    },
+                    "axis": {
+                      "title": "Stock ROI %"
+                    }
+                  },
+                  "secondary": {
+                    "fields": [
+                      {
+                        "fieldName": "GDP_Growth_Pct",
+                        "displayName": "GDP Growth %"
+                      }
+                    ],
+                    "scale": {
+                      "type": "quantitative"
+                    },
+                    "axis": {
+                      "title": "GDP Growth %"
+                    }
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "lag_analysis_rest",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "lag_analysis_all",
+                  "fields": [
+                    {
+                      "name": "Year",
+                      "expression": "`Year`"
+                    },
+                    {
+                      "name": "Stock_ROI_Pct",
+                      "expression": "`Stock_ROI_Pct`"
+                    },
+                    {
+                      "name": "GDP_Growth_Pct",
+                      "expression": "`GDP_Growth_Pct`"
+                    },
+                    {
+                      "name": "Stock_Exchange",
+                      "expression": "`Stock_Exchange`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "facet": {
+                "type": "wrap",
+                "fieldName": "Stock_Exchange",
+                "layout": {
+                  "column": {
+                    "type": "count",
+                    "value": 2
+                  }
+                },
+                "scale": {
+                  "type": "categorical"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Lag Analysis: GDP Growth vs Stock ROI — US & Euro Area"
+              },
+              "version": 1,
+              "mark": {
+                "lineShape": "smooth"
+              },
+              "widgetType": "combo",
+              "encodings": {
+                "x": {
+                  "fieldName": "Year",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "primary": {
+                    "fields": [
+                      {
+                        "fieldName": "Stock_ROI_Pct",
+                        "displayName": "Stock Index ROI %"
+                      }
+                    ],
+                    "scale": {
+                      "type": "quantitative"
+                    },
+                    "axis": {
+                      "title": "Stock ROI %"
+                    }
+                  },
+                  "secondary": {
+                    "fields": [
+                      {
+                        "fieldName": "GDP_Growth_Pct",
+                        "displayName": "GDP Growth %"
+                      }
+                    ],
+                    "scale": {
+                      "type": "quantitative"
+                    },
+                    "axis": {
+                      "title": "GDP Growth %"
+                    }
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 12,
+            "height": 10
+          }
+        },
+        {
+          "widget": {
+            "name": "lag_nikkei",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "lag_analysis_japan",
+                  "fields": [
+                    {
+                      "name": "Year",
+                      "expression": "`Year`"
+                    },
+                    {
+                      "name": "Stock_ROI_Pct",
+                      "expression": "`Stock_ROI_Pct`"
+                    },
+                    {
+                      "name": "GDP_Growth_Pct",
+                      "expression": "`GDP_Growth_Pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": "Lag Analysis: GDP Growth vs Stock ROI — Nikkei 225"
+              },
+              "version": 1,
+              "mark": {
+                "lineShape": "smooth"
+              },
+              "widgetType": "combo",
+              "encodings": {
+                "x": {
+                  "fieldName": "Year",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "primary": {
+                    "fields": [
+                      {
+                        "fieldName": "Stock_ROI_Pct",
+                        "displayName": "Nikkei 225 ROI %"
+                      }
+                    ],
+                    "scale": {
+                      "type": "quantitative"
+                    },
+                    "axis": {
+                      "title": "Stock ROI %"
+                    }
+                  },
+                  "secondary": {
+                    "fields": [
+                      {
+                        "fieldName": "GDP_Growth_Pct",
+                        "displayName": "GDP Growth %"
+                      }
+                    ],
+                    "scale": {
+                      "type": "quantitative"
+                    },
+                    "axis": {
+                      "title": "GDP Growth %"
+                    }
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 12,
+            "height": 8
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "b5d61099",
+      "displayName": "Index vs GDP correlation",
+      "layout": [
+        {
+          "widget": {
+            "name": "b2d0c39b",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "index_gdp_correlation",
+                  "fields": [
+                    {
+                      "name": "Region_Name",
+                      "expression": "`Region_Name`"
+                    },
+                    {
+                      "name": "GDP_Growth_Pct",
+                      "expression": "`GDP_Growth_Pct`"
+                    },
+                    {
+                      "name": "YoY_ROI_Pct",
+                      "expression": "`YoY_ROI_Pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "Index ROI vs GDP Growth Correlation",
+                  "fields": []
+                }
+              },
+              "version": 3,
+              "widgetType": "scatter",
+              "encodings": {
+                "x": {
+                  "fieldName": "GDP_Growth_Pct",
+                  "displayName": "GDP Growth %",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "YoY_ROI_Pct",
+                  "displayName": "Index YoY ROI %",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "Region_Name",
+                  "legend": {
+                    "title": "Region"
+                  },
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 8
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}
